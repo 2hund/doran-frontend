@@ -4,6 +4,10 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../lib/Icon';
 import { PAvatar, NavHeader, BottomNav, Toggle, Segmented } from '../lib/shared';
+import { pickImage } from '../lib/share';
+import { useActiveGroup } from '../api/ActiveGroup';
+import { useMe, useUpdateMe, useGroup, useNotifSettings, useUpdateNotifSettings, useLogout } from '../api/hooks';
+import type { NotificationSettings } from '../api/types';
 
 /* 설정 행 */
 function SetRow({ ic, bg, title, value, toggle, on, onToggle, last, danger, onClick }: {
@@ -23,6 +27,10 @@ function SetRow({ ic, bg, title, value, toggle, on, onToggle, last, danger, onCl
 /* ── 마이페이지 홈 ──────────────────────────── */
 export function MyHome() {
   const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const { data: me } = useMe();
+  const { data: g } = useGroup(groupId);
+  const myName = me?.nickname || me?.name || '나';
   const stats: { ic: IconName; n: string; u: string; label: string }[] = [
     { ic: 'steps', n: '6,910', u: '보', label: '오늘 걸음' },
     { ic: 'check', n: '9', u: '회', label: '이번 주 숙제' },
@@ -43,10 +51,10 @@ export function MyHome() {
         </div>
         <div className="block">
           <button className="me-card press" onClick={() => navigate('/my/profile')}>
-            <PAvatar name="나" size={60} />
+            <PAvatar name={myName} size={60} />
             <div className="me-body">
-              <div className="me-name">김도란 <span className="role-chip">관리자</span></div>
-              <div className="me-sub">우리집 · 막내딸</div>
+              <div className="me-name">{me?.name ?? '…'} {g?.role === 'ADMIN' && <span className="role-chip">관리자</span>}</div>
+              <div className="me-sub">{[g?.name, me?.nickname].filter(Boolean).join(' · ') || '프로필을 완성해보세요'}</div>
             </div>
             <Icon name="chevron" size={19} sw={2.2} color="#C9C3B6" />
           </button>
@@ -88,30 +96,47 @@ export function MyHome() {
 
 /* ── 프로필 수정 ────────────────────────────── */
 export function MyProfileEdit() {
+  const navigate = useNavigate();
+  const { data: me } = useMe();
+  const update = useUpdateMe();
   const [gender, setGender] = useState('여성');
+  const [name, setName] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [inited, setInited] = useState(false);
+
+  if (me && !inited) { setName(me.name ?? ''); setNickname(me.nickname ?? ''); setInited(true); }
+
+  const pickPhoto = async () => { const [f] = await pickImage(); if (f) setPhoto(URL.createObjectURL(f)); };
+  const save = async () => {
+    try { await update.mutateAsync({ name: name.trim(), nickname: nickname.trim() || null }); navigate(-1); }
+    catch { /* noop */ }
+  };
+
   return (
     <div className="screen">
       <div className="scroll" style={{ paddingBottom: 0 }}>
-        <NavHeader title="프로필 수정" trailing={<button className="txt-action press">저장</button>} />
+        <NavHeader title="프로필 수정" trailing={<button className="txt-action press" onClick={save}>저장</button>} />
         <div className="block" style={{ display: 'flex', justifyContent: 'center', paddingTop: 10 }}>
           <div className="profile-pick">
-            <PAvatar name="나" size={96} />
-            <button className="profile-cam press"><Icon name="camera" size={19} sw={1.9} color="#3A463C" /></button>
+            {photo
+              ? <div style={{ width: 96, height: 96, borderRadius: '50%', backgroundImage: `url(${photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+              : <PAvatar name={nickname || name || '나'} size={96} />}
+            <button className="profile-cam press" onClick={pickPhoto}><Icon name="camera" size={19} sw={1.9} color="#3A463C" /></button>
           </div>
         </div>
         <div className="block afields" style={{ paddingTop: 14 }}>
-          <div className="afield"><span className="afield-label">이름</span><div className="afield-box"><Icon name="user" size={19} sw={1.9} color="#A8A296" /><span className="afield-val">김도란</span></div></div>
-          <div className="afield"><span className="afield-label">가족 호칭</span><div className="afield-box"><Icon name="family" size={19} sw={1.9} color="#A8A296" /><span className="afield-val">막내딸</span></div></div>
-          <div className="afield"><span className="afield-label">생년월일</span><div className="afield-box"><Icon name="calendar" size={19} sw={1.9} color="#A8A296" /><span className="afield-val">1998년 5월 14일</span></div></div>
+          <div className="afield"><span className="afield-label">이름</span><div className="afield-box"><Icon name="user" size={19} sw={1.9} color="#A8A296" /><input className="afield-val" value={name} onChange={e => setName(e.target.value)} placeholder="이름" style={{ flex: 1 }} /></div></div>
+          <div className="afield"><span className="afield-label">가족 호칭</span><div className="afield-box"><Icon name="family" size={19} sw={1.9} color="#A8A296" /><input className="afield-val" value={nickname} onChange={e => setNickname(e.target.value)} placeholder="가족이 부르는 호칭" style={{ flex: 1 }} /></div></div>
           <div className="afield">
             <span className="afield-label">성별</span>
             <Segmented tabs={['여성', '남성', '비공개']} value={gender} onChange={setGender} />
           </div>
-          <div className="afield"><span className="afield-label">한 줄 소개</span><div className="afield-box" style={{ height: 'auto', minHeight: 76, alignItems: 'flex-start', paddingTop: 15 }}><span className="afield-val" style={{ color: '#A8A296' }}>가족에게 보여줄 소개를 적어주세요</span></div></div>
         </div>
+        {update.error && <div className="block"><p style={{ color: '#C25C40', fontSize: 13, fontWeight: 600 }}>{(update.error as Error).message}</p></div>}
         <div style={{ height: 20 }} />
       </div>
-      <div className="auth-foot"><button className="btn-primary press">변경사항 저장</button></div>
+      <div className="auth-foot"><button className={`btn-primary press ${update.isPending ? 'disabled' : ''}`} onClick={save} disabled={update.isPending}>{update.isPending ? '저장 중…' : '변경사항 저장'}</button></div>
     </div>
   );
 }
@@ -166,14 +191,22 @@ export function MyStats() {
 /* ── 설정 ───────────────────────────────────── */
 export function MySettings() {
   const navigate = useNavigate();
-  const [push, setPush] = useState(true);
+  const { data: me } = useMe();
+  const { data: notif } = useNotifSettings();
+  const updateNotif = useUpdateNotifSettings();
+  const logout = useLogout();
+  const myName = me?.nickname || me?.name || '나';
+
+  const togglePush = (v: boolean) => { if (notif) updateNotif.mutate({ ...notif, push: v }); };
+  const doLogout = async () => { try { await logout.mutateAsync(); } finally { navigate('/auth'); } };
+
   return (
     <div className="screen">
       <div className="scroll">
         <NavHeader title="설정" />
         <button className="set-profile press" onClick={() => navigate('/my/profile')}>
-          <PAvatar name="나" size={52} />
-          <div className="set-prof-body"><span className="set-prof-name">김도란</span><span className="set-prof-sub">doran@family.com</span></div>
+          <PAvatar name={myName} size={52} />
+          <div className="set-prof-body"><span className="set-prof-name">{me?.name ?? '…'}</span><span className="set-prof-sub">{me?.email ?? ''}</span></div>
           <Icon name="chevron" size={18} sw={2.2} color="#C9C3B6" />
         </button>
         <div className="set-group">
@@ -187,7 +220,7 @@ export function MySettings() {
         <div className="set-group">
           <span className="set-label">알림</span>
           <div className="set-card">
-            <SetRow ic="bell" bg="#FCF1DD" title="푸시 알림" toggle on={push} onToggle={setPush} />
+            <SetRow ic="bell" bg="#FCF1DD" title="푸시 알림" toggle on={notif?.push ?? false} onToggle={togglePush} />
             <SetRow ic="cheer" bg="#FCF1DD" title="알림 상세 설정" last onClick={() => navigate('/my/notif')} />
           </div>
         </div>
@@ -196,7 +229,7 @@ export function MySettings() {
           <div className="set-card">
             <SetRow ic="shield" bg="#F0EBE1" title="개인정보 처리방침" />
             <SetRow ic="info" bg="#F0EBE1" title="서비스 이용약관" />
-            <SetRow ic="logout" bg="#FBE3DB" title="로그아웃" danger last onClick={() => navigate('/auth')} />
+            <SetRow ic="logout" bg="#FBE3DB" title="로그아웃" danger last onClick={doLogout} />
           </div>
         </div>
         <div className="set-version">도란도란 버전 2.4.0</div>
@@ -209,31 +242,40 @@ export function MySettings() {
 
 /* ── 알림 상세 설정 ─────────────────────────── */
 export function MyNotifSettings() {
-  const [s, setS] = useState({ sched: true, cheer: true, gift: true, task: false, news: true, marketing: false });
-  const set = (k: keyof typeof s) => setS(p => ({ ...p, [k]: !p[k] }));
+  const { data: notif, isLoading } = useNotifSettings();
+  const update = useUpdateNotifSettings();
+
+  // 낙관적 토글: 현재 값 기준으로 한 키만 뒤집어 서버에 PUT
+  const toggle = (k: keyof NotificationSettings) => {
+    if (!notif) return;
+    update.mutate({ ...notif, [k]: !notif[k] });
+  };
+  const v = (k: keyof NotificationSettings) => notif?.[k] ?? false;
+
   return (
     <div className="screen">
       <div className="scroll">
         <NavHeader title="알림 설정" />
+        {isLoading && <div className="block"><div className="info-banner">불러오는 중…</div></div>}
         <div className="set-group" style={{ marginTop: 8 }}>
           <span className="set-label">활동 알림</span>
           <div className="set-card">
-            <SetRow ic="calendar" bg="#EEF4ED" title="일정 리마인더" toggle on={s.sched} onToggle={() => set('sched')} />
-            <SetRow ic="check" bg="#EEF4ED" title="숙제 인증 요청" toggle on={s.task} onToggle={() => set('task')} />
-            <SetRow ic="cheer" bg="#FCF1DD" title="응원 · 좋아요" toggle on={s.cheer} onToggle={() => set('cheer')} last />
+            <SetRow ic="calendar" bg="#EEF4ED" title="일정 리마인더" toggle on={v('schedule')} onToggle={() => toggle('schedule')} />
+            <SetRow ic="check" bg="#EEF4ED" title="숙제 인증 요청" toggle on={v('task')} onToggle={() => toggle('task')} />
+            <SetRow ic="cheer" bg="#FCF1DD" title="응원 · 좋아요" toggle on={v('cheer')} onToggle={() => toggle('cheer')} last />
           </div>
         </div>
         <div className="set-group">
           <span className="set-label">소식 알림</span>
           <div className="set-card">
-            <SetRow ic="gift" bg="#FBE3DB" title="선물 · 위시리스트" toggle on={s.gift} onToggle={() => set('gift')} />
-            <SetRow ic="chat" bg="#EEF4ED" title="가족 소식 · 대화" toggle on={s.news} onToggle={() => set('news')} last />
+            <SetRow ic="gift" bg="#FBE3DB" title="선물 알림" toggle on={v('gift')} onToggle={() => toggle('gift')} />
+            <SetRow ic="chat" bg="#EEF4ED" title="가족 소식 · 대화" toggle on={v('news')} onToggle={() => toggle('news')} last />
           </div>
         </div>
         <div className="set-group">
           <span className="set-label">기타</span>
           <div className="set-card">
-            <SetRow ic="bell" bg="#F0EBE1" title="마케팅 정보 수신" toggle on={s.marketing} onToggle={() => set('marketing')} last />
+            <SetRow ic="bell" bg="#F0EBE1" title="마케팅 정보 수신" toggle on={v('marketing')} onToggle={() => toggle('marketing')} last />
           </div>
         </div>
         <p className="notif-note">방해 금지 시간(오후 10시~오전 8시)에는 긴급 알림만 전달돼요.</p>

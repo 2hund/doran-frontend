@@ -3,6 +3,14 @@ import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../lib/Icon';
 import { PAvatar, NavHeader } from '../lib/shared';
+import { useKakaoLogin, useAppleLogin, useCreateGroup, useJoinGroup } from '../api/hooks';
+import { ApiError } from '../api/client';
+import { kakaoLogin, appleLogin } from '../api/social';
+import { pickImage } from '../lib/share';
+import { Capacitor } from '@capacitor/core';
+
+// Apple 로그인 노출 정책: iOS·웹은 노출(애플 심사 규정상 iOS 필수), Android 는 숨김
+const SHOW_APPLE = Capacitor.getPlatform() !== 'android';
 
 /* 도란도란 로고 마크 */
 function Logo({ size = 72, light = false }: { size?: number; light?: boolean }) {
@@ -23,7 +31,7 @@ function Logo({ size = 72, light = false }: { size?: number; light?: boolean }) 
   );
 }
 
-function SocialBtn({ kind }: { kind: 'kakao' | 'apple' | 'email'; }) {
+function SocialBtn({ kind, onClick, loading }: { kind: 'kakao' | 'apple' | 'email'; onClick?: () => void; loading?: boolean }) {
   const map = {
     kakao: { bg: '#FEE500', fg: '#3A2A0A', label: '카카오톡으로 시작하기', border: false, icon: <Icon name="chat" size={20} sw={2.1} color="#3A2A0A" /> },
     apple: { bg: '#1A1A1A', fg: '#fff', label: 'Apple로 시작하기', border: false, icon: <svg width="18" height="20" viewBox="0 0 18 20" fill="#fff"><path d="M14.7 10.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .7 1.1 1.6 2.3 2.8 2.3 1.1 0 1.5-.7 2.9-.7s1.7.7 2.9.7c1.2 0 2-1.1 2.7-2.2.9-1.2 1.2-2.5 1.2-2.5s-2.3-.9-2.3-3.6c0-.1 0-.2.1-.3ZM12.4 3.6c.6-.8 1-1.8.9-2.9-.9 0-2 .6-2.6 1.4-.6.7-1.1 1.7-.9 2.7 1 .1 2-.5 2.6-1.2Z" /></svg> },
@@ -31,9 +39,9 @@ function SocialBtn({ kind }: { kind: 'kakao' | 'apple' | 'email'; }) {
   } as const;
   const s = map[kind];
   return (
-    <button className="social-btn press" style={{ background: s.bg, color: s.fg, border: s.border ? '1px solid #E9E1D5' : 'none' }}>
+    <button className="social-btn press" style={{ background: s.bg, color: s.fg, border: s.border ? '1px solid #E9E1D5' : 'none', opacity: loading ? 0.6 : 1 }} onClick={onClick} disabled={loading}>
       <span className="social-ic">{s.icon}</span>
-      <span className="social-label">{s.label}</span>
+      <span className="social-label">{loading ? '로그인 중…' : s.label}</span>
     </button>
   );
 }
@@ -72,6 +80,33 @@ export function AuthFlow() {
   const [showPw, setShowPw] = useState(false);
   const [keep, setKeep] = useState(true);
 
+  const kakao = useKakaoLogin();
+  const apple = useAppleLogin();
+  const [socialBusy, setSocialBusy] = useState<null | 'kakao' | 'apple'>(null);
+  const loginErr = (kakao.error || apple.error) as ApiError | null;
+
+  /* 소셜 로그인 — 카카오/Apple SDK(api/social)로 토큰 획득 후 백엔드에 전달 */
+  const onKakao = async () => {
+    setSocialBusy('kakao');
+    try {
+      const accessToken = await kakaoLogin();
+      if (!accessToken) return;
+      await kakao.mutateAsync({ accessToken });
+      navigate('/');
+    } catch { /* 에러는 loginErr 로 표시 */ }
+    finally { setSocialBusy(null); }
+  };
+  const onApple = async () => {
+    setSocialBusy('apple');
+    try {
+      const cred = await appleLogin();
+      if (!cred) return;
+      await apple.mutateAsync({ identityToken: cred.identityToken, name: cred.name });
+      navigate('/');
+    } catch { /* noop */ }
+    finally { setSocialBusy(null); }
+  };
+
   if (view === 'start') {
     return (
       <div className="screen auth-start">
@@ -105,13 +140,14 @@ export function AuthFlow() {
             <p className="auth-brand-sub">가족 건강 케어를 시작해보세요</p>
           </div>
           <div className="social-stack">
-            <SocialBtn kind="kakao" />
-            <SocialBtn kind="apple" />
+            <SocialBtn kind="kakao" onClick={onKakao} loading={socialBusy === 'kakao' || kakao.isPending} />
+            {SHOW_APPLE && <SocialBtn kind="apple" onClick={onApple} loading={socialBusy === 'apple' || apple.isPending} />}
             <button className="social-btn press" style={{ background: '#fff', color: '#20231F', border: '1px solid #E9E1D5' }} onClick={() => setView('email')}>
               <span className="social-ic"><Icon name="mail" size={20} sw={1.9} color="#1F4D3A" /></span>
               <span className="social-label">이메일로 시작하기</span>
             </button>
           </div>
+          {loginErr && <p style={{ textAlign: 'center', color: '#C25C40', fontSize: 13, marginTop: 12, fontWeight: 600 }}>{loginErr.message}</p>}
           <div className="auth-divider"><span>또는</span></div>
           <button className="auth-signup-row press" onClick={() => setView('terms')}>
             처음 오셨나요? <b>이메일로 회원가입</b>
@@ -237,6 +273,8 @@ function ProfileSetupView({ onBack, onNext }: { onBack: () => void; onNext: () =
     { name: '큰딸', c: '#C98A40' }, { name: '할머니', c: '#A6705A' },
   ];
   const [sel, setSel] = useState('나');
+  const [photo, setPhoto] = useState<string | null>(null);
+  const pickPhoto = async () => { const [f] = await pickImage(); if (f) setPhoto(URL.createObjectURL(f)); };
   return (
     <div className="screen">
       <div className="scroll" style={{ paddingBottom: 0 }}>
@@ -248,8 +286,10 @@ function ProfileSetupView({ onBack, onNext }: { onBack: () => void; onNext: () =
         </div>
         <div className="block" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 8 }}>
           <div className="profile-pick">
-            <PAvatar name={sel} size={104} />
-            <button className="profile-cam press"><Icon name="camera" size={20} sw={1.9} color="#3A463C" /></button>
+            {photo
+              ? <div style={{ width: 104, height: 104, borderRadius: '50%', backgroundImage: `url(${photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+              : <PAvatar name={sel} size={104} />}
+            <button className="profile-cam press" onClick={pickPhoto}><Icon name="camera" size={20} sw={1.9} color="#3A463C" /></button>
           </div>
           <span className="profile-cap">색상을 선택하거나 사진을 올려보세요</span>
           <div className="color-row">
@@ -274,6 +314,20 @@ function ProfileSetupView({ onBack, onNext }: { onBack: () => void; onNext: () =
 
 function GroupStartView({ onNext }: { onNext: () => void }) {
   const [sel, setSel] = useState<'create' | 'join'>('create');
+  const [name, setName] = useState('우리집');
+  const [code, setCode] = useState('');
+  const createGroup = useCreateGroup();
+  const joinGroup = useJoinGroup();
+  const busy = createGroup.isPending || joinGroup.isPending;
+  const err = (createGroup.error || joinGroup.error) as ApiError | null;
+
+  const submit = async () => {
+    try {
+      if (sel === 'create') await createGroup.mutateAsync({ name: name.trim() || '우리집' });
+      else await joinGroup.mutateAsync({ code: code.trim() });
+      onNext();
+    } catch { /* err 로 표시 */ }
+  };
   return (
     <div className="screen">
       <div className="scroll" style={{ paddingBottom: 0 }}>
@@ -301,23 +355,31 @@ function GroupStartView({ onNext }: { onNext: () => void }) {
 
           {sel === 'create' && (
             <div className="grp-detail">
-              <Field label="그룹 이름" value="우리집" icon="family" focus />
+              <div className="afield">
+                <span className="afield-label" style={{ paddingLeft: 2 }}>그룹 이름</span>
+                <div className="afield-box focus">
+                  <Icon name="family" size={19} sw={1.9} color="#1F4D3A" />
+                  <input className="afield-val" value={name} onChange={e => setName(e.target.value)} placeholder="우리집" style={{ flex: 1 }} />
+                </div>
+              </div>
             </div>
           )}
           {sel === 'join' && (
             <div className="grp-detail">
               <span className="afield-label" style={{ paddingLeft: 2 }}>초대 코드</span>
-              <div className="code-row" style={{ marginTop: 9 }}>
-                {['D', 'O', 'R', 'A', 'N', ''].map((c, i) => (
-                  <div key={i} className={`code-box ${c ? 'filled' : ''} ${i === 5 ? 'active' : ''}`} style={{ fontSize: 20 }}>{c || (i === 5 ? <span className="caret" /> : '')}</div>
-                ))}
+              <div className="afield-box focus" style={{ marginTop: 9 }}>
+                <Icon name="link" size={19} sw={1.9} color="#C7841A" />
+                <input className="afield-val" value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="초대 코드 입력" maxLength={12} style={{ flex: 1, letterSpacing: '0.1em', fontWeight: 700 }} />
               </div>
             </div>
           )}
+          {err && <p style={{ color: '#C25C40', fontSize: 13, fontWeight: 600, paddingLeft: 2 }}>{err.message}</p>}
         </div>
       </div>
       <div className="auth-foot">
-        <button className="btn-primary press" onClick={onNext}>{sel === 'create' ? '그룹 만들기' : '그룹 참여하기'}</button>
+        <button className={`btn-primary press ${busy || (sel === 'join' && !code.trim()) ? 'disabled' : ''}`} onClick={submit} disabled={busy}>
+          {busy ? '처리 중…' : sel === 'create' ? '그룹 만들기' : '그룹 참여하기'}
+        </button>
         <button className="auth-skip press" onClick={onNext}>나중에 할게요</button>
       </div>
     </div>

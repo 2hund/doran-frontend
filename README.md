@@ -18,19 +18,25 @@ npm run build      # 프로덕션 빌드 (dist/)
 ## 모바일 앱으로 패키징 (Capacitor)
 
 웹 코드 그대로 iOS/Android 네이티브 앱으로 빌드합니다.
+**`ios/`·`android/` 네이티브 프로젝트는 이미 추가되어 저장소에 포함**되어 있습니다.
 
 ```bash
-# 최초 1회 — 네이티브 플랫폼 추가
-npm i @capacitor/ios @capacitor/android
-npx cap add ios
-npx cap add android
+# 웹 빌드 후 동기화 & 네이티브 IDE 열기
+npm run cap:ios        # Xcode 열기
+npm run cap:android    # Android Studio 열기
 
-# 이후 — 웹 빌드 후 동기화 & 네이티브 IDE 열기
-npm run cap:ios        # Xcode
-npm run cap:android    # Android Studio
+# 빌드만 동기화하려면
+npm run build && npx cap sync
 ```
 
-설정은 `capacitor.config.ts` (appId `com.dorandoran.app`) 참고.
+- **설정**: `capacitor.config.ts` (appId `com.dorandoran.app`, appName `도란도란`)
+- **네이티브 초기화**: `src/native.ts` — 상태바 색/스타일, 스플래시 숨김, Android 뒤로가기 처리 (웹에서는 no-op)
+- **설치된 플러그인**: `@capacitor/status-bar`, `splash-screen`, `keyboard`, `app`, `preferences`
+- **iOS 권한**: 카메라·사진 보관함 사용 설명을 `Info.plist`에 추가 (숙제 인증·프로필 사진)
+- **iOS 빌드 전 1회**: 전체 Xcode가 활성화돼 있어야 함 — `sudo xcode-select -s /Applications/Xcode.app`
+- **Android 빌드**: Android Studio(또는 Android SDK + `ANDROID_HOME`) 필요
+
+> iOS는 Capacitor 8의 Swift Package Manager 방식이라 별도 `pod install` 없이 빌드됩니다.
 
 ## 화면 구조 (하단 5탭)
 

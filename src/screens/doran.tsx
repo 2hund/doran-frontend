@@ -3,28 +3,46 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../lib/Icon';
 import { PAvatar, RingAvatar, SecHead, NavHeader, BottomNav, BottomSheet, EmptyState, Segmented } from '../lib/shared';
+import { useActiveGroup } from '../api/ActiveGroup';
+import { useTasks, useTask, useCreateTask, useCertifyTask, useDeleteTask, useMembers, useMe, useSchedules } from '../api/hooks';
+import { pickImage } from '../lib/share';
+import type { TaskResponse } from '../api/types';
 
 export const DORAN_MEM = ['엄마', '아빠', '나', '큰딸', '할머니', '삼촌'];
 
-interface TaskMiniProps {
-  icon: IconName; title: string; who: string; done: number; total: number; status: string; tone: 'amber' | 'green' | 'gray';
+/* 숙제 응답에서 진척도/담당자 등 안전 추출 */
+function taskInfo(t: TaskResponse) {
+  const total = t.goal ?? (t as Record<string, unknown>).total as number ?? 7;
+  const done = t.done ?? t.progress ?? (t as Record<string, unknown>).certCount as number ?? 0;
+  const who = t.assignee?.name ?? ((t as Record<string, unknown>).assigneeName as string) ?? '';
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const complete = done >= total;
+  return { total, done, who, pct, complete };
 }
-export function TaskMini({ icon, title, who, done, total, status, tone }: TaskMiniProps) {
+const CAT_ICON: Record<string, IconName> = { 복약: 'pill', 운동: 'steps', 건강기록: 'heart', 생활습관: 'sun', 기타: 'diary' };
+function taskIcon(t: TaskResponse): IconName {
+  const c = (t.category as string) || '';
+  return CAT_ICON[c] || 'check';
+}
+
+export function TaskMini({ task }: { task: TaskResponse }) {
   const navigate = useNavigate();
-  const pct = Math.round((done / total) * 100);
+  const { done, total, who, pct, complete } = taskInfo(task);
+  const tone = complete ? 'gray' : done < total / 2 ? 'amber' : 'green';
+  const status = complete ? '완료' : done < total / 2 ? '인증 필요' : '진행중';
   return (
-    <div className="task press" onClick={() => navigate('/group/task')}>
+    <div className="task press" onClick={() => navigate(`/group/task?tid=${task.id}`)}>
       <div className="task-row1">
-        <div className="task-ico"><Icon name={icon} size={20} sw={1.9} color="#1F4D3A" /></div>
+        <div className="task-ico"><Icon name={taskIcon(task)} size={20} sw={1.9} color="#1F4D3A" /></div>
         <div className="task-head">
-          <span className="task-title">{title}</span>
-          <div className="task-who"><PAvatar name={who} size={20} /><span>{who}</span></div>
+          <span className="task-title">{task.title}</span>
+          {who && <div className="task-who"><PAvatar name={who} size={20} /><span>{who}</span></div>}
         </div>
         <span className={`chip chip-${tone}`}>{status}</span>
       </div>
       <div className="task-row2">
         <div className="task-prog"><div className="bar"><div className="bar-fill" style={{ width: `${pct}%` }} /></div><span className="task-count">{done}/{total} 완료</span></div>
-        <button className="btn-cert press" onClick={(e) => { e.stopPropagation(); navigate('/group/task'); }}>인증하기</button>
+        <button className="btn-cert press" onClick={(e) => { e.stopPropagation(); navigate(`/group/task?tid=${task.id}`); }}>인증하기</button>
       </div>
     </div>
   );
@@ -33,18 +51,32 @@ export function TaskMini({ icon, title, who, done, total, status, tone }: TaskMi
 /* ── 도란도란 메인 (핵심만) ─────────────────── */
 export function DoranMain() {
   const navigate = useNavigate();
-  const todos = [
-    { ic: 'pill' as IconName, title: '감기약 복용하기', sub: '우리집 · 매일 오전 9시', tone: '#DDEBDD' },
-    { ic: 'steps' as IconName, title: '하루 30분 걷기', sub: '우리집 · 오늘 목표', tone: '#DDEBDD' },
-  ];
+  const { groupId } = useActiveGroup();
+  const { data: me } = useMe();
+  const { data: tasks } = useTasks(groupId);
+  const { data: schedules } = useSchedules(groupId);
+
+  const today = new Date();
+  const dateLabel = `${today.getMonth() + 1}월 ${today.getDate()}일 ${['일', '월', '화', '수', '목', '금', '토'][today.getDay()]}요일`;
+
+  // 미완료 숙제만
+  const pending = (tasks ?? []).filter(t => { const { complete } = taskInfo(t); return !complete; });
+  // 오늘/다가오는 첫 일정
+  const upcoming = (schedules ?? [])
+    .map(s => ({ s, d: s.startAt ? new Date(s.startAt) : null }))
+    .filter((x): x is { s: typeof x.s; d: Date } => x.d != null && x.d.getTime() >= today.setHours(0, 0, 0, 0))
+    .sort((a, b) => a.d.getTime() - b.d.getTime())[0];
+
+  const fmtT = (d: Date) => { const h = d.getHours(); return `${h < 12 ? '오전' : '오후'} ${h % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
   return (
     <div className="screen">
       <div className="scroll">
         <div className="main-greet">
           <div className="mg-row">
             <div>
-              <p className="mg-date">6월 17일 화요일</p>
-              <h1 className="mg-hello">안녕하세요, 도란님</h1>
+              <p className="mg-date">{dateLabel}</p>
+              <h1 className="mg-hello">안녕하세요, {me?.nickname || me?.name || '도란'}님</h1>
             </div>
             <button className="ic-btn press" onClick={() => navigate('/news')}><Icon name="bell" size={21} sw={1.9} color="#3A463C" /><span className="ic-dot" /></button>
           </div>
@@ -52,34 +84,57 @@ export function DoranMain() {
 
         <section className="block">
           <SecHead title="오늘 꼭 챙길 일" />
-          <button className="today-hero press" onClick={() => navigate('/schedule/detail')}>
-            <div className="th-top"><span className="th-badge">오늘 일정</span><span className="th-time"><Icon name="clock" size={14} sw={2} color="#9DC2A4" />오후 1:00</span></div>
-            <h2 className="th-title">엄마 정기 검진</h2>
-            <p className="th-meta">행복내과의원 · 공복 검사 있어요</p>
-            <div className="th-foot">
-              <div className="th-avs"><PAvatar name="엄마" size={26} ring ringColor="#1F4D3A" /><div style={{ marginLeft: -8 }}><PAvatar name="나" size={26} ring ringColor="#1F4D3A" /></div><span className="th-with">엄마, 나</span></div>
-              <span className="th-link">일정 보기<Icon name="chevron" size={15} sw={2.3} color="#9DC2A4" /></span>
-            </div>
-          </button>
+          {upcoming ? (
+            <button className="today-hero press" onClick={() => navigate(`/schedule/detail?eid=${upcoming.s.id}`)}>
+              <div className="th-top"><span className="th-badge">{today.toDateString() === upcoming.d.toDateString() ? '오늘 일정' : '다가오는 일정'}</span><span className="th-time"><Icon name="clock" size={14} sw={2} color="#9DC2A4" />{fmtT(upcoming.d)}</span></div>
+              <h2 className="th-title">{upcoming.s.title}</h2>
+              {(upcoming.s as Record<string, unknown>).location ? <p className="th-meta">{String((upcoming.s as Record<string, unknown>).location)}</p> : null}
+              <div className="th-foot">
+                <div className="th-avs">{(upcoming.s.members ?? []).slice(0, 2).map((m, i) => <div key={m.userId} style={{ marginLeft: i ? -8 : 0 }}><PAvatar name={m.name} size={26} ring ringColor="#1F4D3A" /></div>)}<span className="th-with">{(upcoming.s.members ?? []).map(m => m.name).join(', ')}</span></div>
+                <span className="th-link">일정 보기<Icon name="chevron" size={15} sw={2.3} color="#9DC2A4" /></span>
+              </div>
+            </button>
+          ) : (
+            <div className="nudge"><div className="nudge-ic"><Icon name="calendar" size={18} sw={1.9} color="#C7841A" /></div><span className="nudge-text">다가오는 일정이 없어요</span></div>
+          )}
         </section>
 
         <section className="block">
           <SecHead title="오늘 해야 할 숙제" action="전체보기" onAction={() => navigate('/group/tasks')} />
           <div className="stack">
-            {todos.map((t, i) => (
-              <div key={i} className="dtask">
-                <div className="dtask-ic" style={{ background: t.tone }}><Icon name={t.ic} size={20} sw={1.9} color="#1F4D3A" /></div>
-                <div className="dtask-body"><span className="dtask-title">{t.title}</span><span className="dtask-sub">{t.sub}</span></div>
-                <button className="dtask-btn press" onClick={() => navigate('/group/task')}><Icon name="camera" size={15} sw={2} color="#fff" />인증</button>
+            {pending.slice(0, 4).map(t => (
+              <div key={t.id} className="dtask">
+                <div className="dtask-ic" style={{ background: '#DDEBDD' }}><Icon name={taskIcon(t)} size={20} sw={1.9} color="#1F4D3A" /></div>
+                <div className="dtask-body"><span className="dtask-title">{t.title}</span>{taskInfo(t).who && <span className="dtask-sub">{taskInfo(t).who}</span>}</div>
+                <button className="dtask-btn press" onClick={() => navigate(`/group/task?tid=${t.id}`)}><Icon name="camera" size={15} sw={2} color="#fff" />인증</button>
               </div>
             ))}
-            <div className="dtask-foot"><Icon name="check" size={15} sw={2.2} color="#9A958A" />오늘 인증할 숙제 <b>2건</b> 남았어요</div>
+            {pending.length > 0
+              ? <div className="dtask-foot"><Icon name="check" size={15} sw={2.2} color="#9A958A" />오늘 인증할 숙제 <b>{pending.length}건</b> 남았어요</div>
+              : <div className="dtask-foot"><Icon name="check" size={15} sw={2.2} color="#4F8A5B" />오늘 숙제를 모두 끝냈어요!</div>}
           </div>
         </section>
         <div style={{ height: 18 }} />
       </div>
       <BottomNav active="도란도란" />
     </div>
+  );
+}
+
+/* 허브 내 숙제 진행 현황 (실데이터) */
+function HubTaskSection() {
+  const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const { data: tasks } = useTasks(groupId);
+  const top = (tasks ?? []).slice(0, 3);
+  return (
+    <section className="block">
+      <SecHead title="숙제 진행 현황" action="전체보기" onAction={() => navigate('/group/tasks')} />
+      <div className="stack">
+        {top.map(t => <TaskMini key={t.id} task={t} />)}
+        {top.length === 0 && <div className="nudge"><div className="nudge-ic"><Icon name="check" size={18} sw={1.9} color="#C7841A" /></div><span className="nudge-text">등록된 숙제가 없어요</span></div>}
+      </div>
+    </section>
   );
 }
 
@@ -126,13 +181,7 @@ export function DoranGroupHub() {
           </div>
         </section>
 
-        <section className="block">
-          <SecHead title="숙제 진행 현황" action="전체보기" onAction={() => navigate('/group/tasks')} />
-          <div className="stack">
-            <TaskMini icon="pill" title="감기약 복용하기" who="엄마" done={3} total={7} status="인증 필요" tone="amber" />
-            <TaskMini icon="steps" title="하루 30분 걷기" who="아빠" done={5} total={7} status="진행중" tone="green" />
-          </div>
-        </section>
+        <HubTaskSection />
 
         <section className="block">
           <SecHead title="이번 달 랭킹" action="전체보기" onAction={() => navigate('/group/ranking')} />
@@ -164,25 +213,25 @@ export function DoranGroupHub() {
 /* ── 숙제 전체보기 ──────────────────────────── */
 export function DoranTasks() {
   const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const { data: tasks, isLoading } = useTasks(groupId);
   const [tab, setTab] = useState('진행중');
-  const ongoing: TaskMiniProps[] = [
-    { icon: 'pill', title: '감기약 복용하기', who: '엄마', done: 3, total: 7, status: '인증 필요', tone: 'amber' },
-    { icon: 'steps', title: '하루 30분 걷기', who: '아빠', done: 5, total: 7, status: '진행중', tone: 'green' },
-    { icon: 'sun', title: '아침 스트레칭', who: '할머니', done: 2, total: 7, status: '진행중', tone: 'green' },
-    { icon: 'heart', title: '혈압 기록하기', who: '아빠', done: 4, total: 7, status: '인증 필요', tone: 'amber' },
-  ];
-  const done: TaskMiniProps[] = [
-    { icon: 'pill', title: '영양제 챙기기', who: '엄마', done: 7, total: 7, status: '완료', tone: 'gray' },
-    { icon: 'chart', title: '체중 기록하기', who: '나', done: 7, total: 7, status: '완료', tone: 'gray' },
-  ];
-  const list = tab === '진행중' ? ongoing : done;
+
+  const all = tasks ?? [];
+  const list = all.filter(t => { const { complete } = taskInfo(t); return tab === '진행중' ? !complete : complete; });
+
+  if (!isLoading && all.length === 0) {
+    return <DoranEmpty />;
+  }
   return (
     <div className="screen">
       <div className="scroll">
         <NavHeader title="건강 숙제" trailing={<button className="icon-action press" onClick={() => navigate('/group/task/new')}><Icon name="plus" size={22} sw={2.2} color="#3A463C" /></button>} />
         <div style={{ padding: '4px 22px 0' }}><Segmented tabs={['진행중', '완료']} value={tab} onChange={setTab} /></div>
         <div className="block stack" style={{ paddingTop: 16 }}>
-          {list.map((t, i) => <TaskMini key={i} {...t} />)}
+          {isLoading && <div className="nudge"><span className="nudge-text">불러오는 중…</span></div>}
+          {list.map(t => <TaskMini key={t.id} task={t} />)}
+          {!isLoading && list.length === 0 && <div className="nudge"><div className="nudge-ic"><Icon name="check" size={18} sw={1.9} color="#C7841A" /></div><span className="nudge-text">{tab} 숙제가 없어요</span></div>}
         </div>
         <div style={{ height: 18 }} />
       </div>
@@ -192,46 +241,26 @@ export function DoranTasks() {
 }
 
 /* ── 숙제 상세·인증 ─────────────────────────── */
-export function DoranTaskDetail({ onCertify }: { onCertify?: () => void }) {
-  const days = [
-    { d: '월', on: true }, { d: '화', on: true }, { d: '수', on: true },
-    { d: '목', on: false, today: true }, { d: '금', on: false }, { d: '토', on: false }, { d: '일', on: false },
-  ];
+export function DoranTaskDetail({ task, onCertify, onMore }: { task?: TaskResponse; onCertify?: () => void; onMore?: () => void }) {
+  const info = task ? taskInfo(task) : null;
+  const pct = info?.pct ?? 0;
+  const tone = !info ? 'green' : info.complete ? 'gray' : info.done < info.total / 2 ? 'amber' : 'green';
+  const status = !info ? '' : info.complete ? '완료' : info.done < info.total / 2 ? '인증 필요' : '진행중';
   return (
     <div className="screen">
       <div className="scroll" style={{ paddingBottom: 0 }}>
-        <NavHeader title="숙제 상세" trailing={<button className="icon-action press"><Icon name="dots" size={20} color="#3A463C" /></button>} />
+        <NavHeader title="숙제 상세" trailing={onMore ? <button className="icon-action press" onClick={onMore}><Icon name="dots" size={20} color="#3A463C" /></button> : undefined} />
         <div className="block">
           <div className="td-hero">
-            <div className="td-ico"><Icon name="pill" size={26} sw={1.8} color="#1F4D3A" /></div>
-            <h2 className="td-title">감기약 복용하기</h2>
-            <div className="td-who"><PAvatar name="엄마" size={24} />엄마 · 매일 오전 9시</div>
+            <div className="td-ico"><Icon name={task ? taskIcon(task) : 'check'} size={26} sw={1.8} color="#1F4D3A" /></div>
+            <h2 className="td-title">{task?.title ?? '숙제'}</h2>
+            {info?.who && <div className="td-who"><PAvatar name={info.who} size={24} />{info.who}</div>}
           </div>
         </div>
         <div className="block" style={{ paddingTop: 8 }}>
           <div className="prog-card">
-            <div className="prog-top"><div><span className="prog-big">3<i>/7일</i></span><span className="prog-cap">이번 주 인증 현황</span></div><span className="chip chip-amber">인증 필요</span></div>
-            <div className="bar" style={{ marginTop: 14 }}><div className="bar-fill" style={{ width: '43%' }} /></div>
-            <div className="day-check">
-              {days.map((x, i) => (
-                <div key={i} className={`dc ${x.on ? 'on' : ''} ${x.today ? 'today' : ''}`}>
-                  <span className="dc-day">{x.d}</span>
-                  <span className="dc-mark">{x.on ? <Icon name="check" size={16} sw={2.6} color="#fff" /> : x.today ? <span className="dc-now" /> : <span className="dc-empty" />}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-        <div className="block" style={{ paddingTop: 10 }}>
-          <span className="memo-label">인증 기록</span>
-          <div className="cert-list">
-            {[['수', '어제 오전 9:12'], ['화', '2일 전 오전 8:50'], ['월', '3일 전 오전 9:05']].map(([d, t], i) => (
-              <div key={i} className="cert-row">
-                <div className="cert-thumb"><Icon name="image" size={20} sw={1.6} color="#C9B79E" /></div>
-                <div className="cert-body"><span className="cert-day">{d}요일 인증 완료</span><span className="cert-time">{t}</span></div>
-                <Icon name="check" size={20} sw={2.4} color="#4F8A5B" />
-              </div>
-            ))}
+            <div className="prog-top"><div><span className="prog-big">{info?.done ?? 0}<i>/{info?.total ?? 7}일</i></span><span className="prog-cap">이번 주 인증 현황</span></div><span className={`chip chip-${tone}`}>{status}</span></div>
+            <div className="bar" style={{ marginTop: 14 }}><div className="bar-fill" style={{ width: `${pct}%` }} /></div>
           </div>
         </div>
         <div style={{ height: 20 }} />
@@ -243,43 +272,111 @@ export function DoranTaskDetail({ onCertify }: { onCertify?: () => void }) {
 
 /* ── 숙제 인증 시트 (상세 + 시트) ───────────── */
 export function DoranTaskPage() {
+  const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const tid = Number(new URLSearchParams(window.location.search).get('tid')) || null;
+  const { data: task } = useTask(groupId, tid);
+  const certify = useCertifyTask(groupId ?? 0);
+  const deleteTask = useDeleteTask(groupId ?? 0);
   const [sheet, setSheet] = useState(false);
+  const [memo, setMemo] = useState('');
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+
+  const addPhoto = async () => {
+    const [file] = await pickImage();
+    if (file) setPhoto(URL.createObjectURL(file));
+  };
+  const submit = async () => {
+    if (!groupId || !tid) return;
+    // photoUrl 은 업로드 API 연동 시 실제 URL 로 교체 (현재는 미리보기까지)
+    try { await certify.mutateAsync({ taskId: tid, body: { memo: memo.trim() || null } }); setSheet(false); setPhoto(null); navigate('/group/tasks'); }
+    catch { /* noop */ }
+  };
+  const doDelete = async () => {
+    if (!groupId || !tid) return;
+    try { await deleteTask.mutateAsync(tid); navigate('/group/tasks'); } catch { /* noop */ }
+  };
+
   return (
     <>
-      <DoranTaskDetail onCertify={() => setSheet(true)} />
+      <DoranTaskDetail task={task} onCertify={() => setSheet(true)} onMore={() => setMenuOpen(true)} />
       <BottomSheet open={sheet} onClose={() => setSheet(false)} title="오늘 숙제 인증"
-        footer={<button className="btn-primary press" onClick={() => setSheet(false)}>인증 완료하기</button>}>
-        <div className="cert-target"><div className="task-ico" style={{ width: 40, height: 40 }}><Icon name="pill" size={19} sw={1.9} color="#1F4D3A" /></div><div><div className="ct-name">감기약 복용하기</div><div className="ct-sub">목요일 · 오늘 인증</div></div></div>
+        footer={<button className="btn-primary press" onClick={submit} disabled={certify.isPending}>{certify.isPending ? '인증 중…' : '인증 완료하기'}</button>}>
+        <div className="cert-target"><div className="task-ico" style={{ width: 40, height: 40 }}><Icon name={task ? taskIcon(task) : 'check'} size={19} sw={1.9} color="#1F4D3A" /></div><div><div className="ct-name">{task?.title ?? '숙제'}</div><div className="ct-sub">오늘 인증</div></div></div>
         <div className="afield">
           <span className="afield-label">인증 사진</span>
-          <div className="upload-box press">
-            <div className="upload-ic"><Icon name="camera" size={26} sw={1.8} color="#7FA585" /></div>
-            <span className="upload-title">복용 사진을 올려주세요</span>
-            <span className="upload-sub">사진을 올리면 가족 소식에 공유돼요</span>
+          {photo ? (
+            <div className="upload-box press" onClick={addPhoto} style={{ backgroundImage: `url(${photo})`, backgroundSize: 'cover', backgroundPosition: 'center', minHeight: 160, border: 'none' }} />
+          ) : (
+            <div className="upload-box press" onClick={addPhoto}>
+              <div className="upload-ic"><Icon name="camera" size={26} sw={1.8} color="#7FA585" /></div>
+              <span className="upload-title">인증 사진을 올려주세요</span>
+              <span className="upload-sub">사진을 올리면 가족 소식에 공유돼요</span>
+            </div>
+          )}
+        </div>
+        <div className="afield"><span className="afield-label">한마디 (선택)</span><div className="afield-box"><input className="afield-val" value={memo} onChange={e => setMemo(e.target.value)} placeholder="오늘 컨디션은 어땠나요?" style={{ flex: 1 }} /></div></div>
+        <div className="cert-share"><Icon name="cheer" size={17} sw={1.9} color="#C7841A" /><span>인증하면 가족에게 알림이 가고 응원을 받을 수 있어요</span></div>
+        {certify.error && <p style={{ color: '#C25C40', fontSize: 13, fontWeight: 600 }}>{(certify.error as Error).message}</p>}
+      </BottomSheet>
+
+      {/* 더보기 메뉴 */}
+      <BottomSheet open={menuOpen} onClose={() => setMenuOpen(false)} title="숙제 관리">
+        <button className="mm-opt press danger" style={{ width: '100%' }} onClick={() => { setMenuOpen(false); setDelOpen(true); }}>
+          <Icon name="trash" size={18} sw={1.9} color="#C25C40" />숙제 삭제하기
+        </button>
+      </BottomSheet>
+
+      {delOpen && (
+        <div className="dialog-layer open">
+          <div className="dialog-scrim" onClick={() => setDelOpen(false)} />
+          <div className="dialog">
+            <div className="dialog-ic"><Icon name="trash" size={26} sw={1.9} color="#C25C40" /></div>
+            <h4 className="dialog-title">숙제를 삭제할까요?</h4>
+            <p className="dialog-desc">«{task?.title ?? '숙제'}» 숙제와 인증 기록이 삭제돼요.<br />이 작업은 되돌릴 수 없어요.</p>
+            <div className="dialog-actions">
+              <button className="dlg-btn press" onClick={() => setDelOpen(false)}>취소</button>
+              <button className="dlg-btn danger press" onClick={doDelete} disabled={deleteTask.isPending}>{deleteTask.isPending ? '삭제 중…' : '삭제'}</button>
+            </div>
           </div>
         </div>
-        <div className="afield"><span className="afield-label">한마디 (선택)</span><div className="afield-box"><span className="afield-val" style={{ color: '#A8A296' }}>오늘 컨디션은 어땠나요?</span></div></div>
-        <div className="cert-share"><Icon name="cheer" size={17} sw={1.9} color="#C7841A" /><span>인증하면 가족에게 알림이 가고 응원을 받을 수 있어요</span></div>
-      </BottomSheet>
+      )}
     </>
   );
 }
 
 /* ── 숙제 만들기 폼 ─────────────────────────── */
 export function DoranNewTask() {
-  const [members, setMembers] = useState<string[]>(['엄마']);
+  const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const { data: groupMembers } = useMembers(groupId);
+  const create = useCreateTask(groupId ?? 0);
   const cats: { ic: IconName; label: string }[] = [
     { ic: 'pill', label: '복약' }, { ic: 'steps', label: '운동' }, { ic: 'heart', label: '건강기록' },
     { ic: 'sun', label: '생활습관' }, { ic: 'diary', label: '기타' },
   ];
+  const [title, setTitle] = useState('');
   const [cat, setCat] = useState('복약');
-  const toggle = (m: string) => setMembers(p => p.includes(m) ? p.filter(x => x !== m) : [...p, m]);
+  const [goal, setGoal] = useState(7);
+  const [memberIds, setMemberIds] = useState<number[]>([]);
+  const toggle = (id: number) => setMemberIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+
+  const submit = async () => {
+    if (!groupId || !title.trim()) return;
+    try {
+      await create.mutateAsync({ title: title.trim(), category: cat, goal, assigneeIds: memberIds });
+      navigate('/group/tasks');
+    } catch { /* noop */ }
+  };
+
   return (
     <div className="screen">
       <div className="scroll" style={{ paddingBottom: 0 }}>
         <NavHeader title="건강 숙제 만들기" />
         <div className="block afields" style={{ paddingTop: 8 }}>
-          <div className="afield"><span className="afield-label">숙제 이름</span><div className="afield-box focus"><Icon name="diary" size={19} sw={1.9} color="#1F4D3A" /><span className="afield-val">감기약 복용하기</span></div></div>
+          <div className="afield"><span className="afield-label">숙제 이름</span><div className="afield-box focus"><Icon name="diary" size={19} sw={1.9} color="#1F4D3A" /><input className="afield-val" value={title} onChange={e => setTitle(e.target.value)} placeholder="예: 감기약 복용하기" style={{ flex: 1 }} /></div></div>
         </div>
         <div className="block" style={{ paddingTop: 8 }}>
           <span className="afield-label" style={{ display: 'block', paddingLeft: 2, marginBottom: 10 }}>분류</span>
@@ -294,23 +391,25 @@ export function DoranNewTask() {
         <div className="block" style={{ paddingTop: 12 }}>
           <span className="afield-label" style={{ display: 'block', paddingLeft: 2, marginBottom: 10 }}>담당 멤버</span>
           <div className="chip-select">
-            {['엄마', '아빠', '나', '큰딸', '할머니', '삼촌'].map(m => (
-              <button key={m} className={`chip-opt press ${members.includes(m) ? 'on' : ''}`} onClick={() => toggle(m)}>
-                <PAvatar name={m} size={22} />{m}
+            {(groupMembers ?? []).map(m => (
+              <button key={m.userId} className={`chip-opt press ${memberIds.includes(m.userId) ? 'on' : ''}`} onClick={() => toggle(m.userId)}>
+                <PAvatar name={m.name} size={22} />{m.name}
               </button>
             ))}
           </div>
         </div>
         <div className="block" style={{ paddingTop: 12 }}>
-          <div className="form-card">
-            <button className="form-row press"><div className="form-ico" style={{ background: '#EEF4ED' }}><Icon name="leaf" size={18} sw={1.9} color="#1F4D3A" /></div><span className="form-label">반복</span><span className="form-val">매일</span><Icon name="chevron" size={17} sw={2.2} color="#C9C3B6" /></button>
-            <button className="form-row press"><div className="form-ico" style={{ background: '#EEF4ED' }}><Icon name="calendar" size={18} sw={1.9} color="#1F4D3A" /></div><span className="form-label">기간</span><span className="form-val">7일간</span><Icon name="chevron" size={17} sw={2.2} color="#C9C3B6" /></button>
-            <button className="form-row press"><div className="form-ico" style={{ background: '#FCF1DD' }}><Icon name="bell" size={18} sw={1.9} color="#1F4D3A" /></div><span className="form-label">알림</span><span className="form-val">오전 9:00</span><Icon name="chevron" size={17} sw={2.2} color="#C9C3B6" /></button>
+          <span className="afield-label" style={{ display: 'block', paddingLeft: 2, marginBottom: 10 }}>주간 목표 횟수</span>
+          <div className="chip-select">
+            {[3, 5, 7].map(n => (
+              <button key={n} className={`chip-opt press ${goal === n ? 'on' : ''}`} onClick={() => setGoal(n)}>주 {n}회</button>
+            ))}
           </div>
         </div>
+        {create.error && <div className="block"><p style={{ color: '#C25C40', fontSize: 13, fontWeight: 600 }}>{(create.error as Error).message}</p></div>}
         <div style={{ height: 20 }} />
       </div>
-      <div className="auth-foot"><button className="btn-primary press">숙제 등록하기</button></div>
+      <div className="auth-foot"><button className={`btn-primary press ${create.isPending || !title.trim() ? 'disabled' : ''}`} onClick={submit} disabled={create.isPending}>{create.isPending ? '등록 중…' : '숙제 등록하기'}</button></div>
     </div>
   );
 }

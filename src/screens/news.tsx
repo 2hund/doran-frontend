@@ -3,39 +3,60 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../lib/Icon';
 import { PAvatar, NavHeader, BottomNav, BottomSheet } from '../lib/shared';
+import { useActiveGroup } from '../api/ActiveGroup';
+import {
+  useNewsFeed, usePost, useCreatePost, useDeletePost, useAddComment, useSendCheer,
+  useRooms, useMessages, useSendMessage, useMe,
+} from '../api/hooks';
+import type { PostResponse, Reaction } from '../api/types';
+import { pickImage } from '../lib/share';
 
-const NEWS_TONE: Record<string, { bg: string; ic: IconName; c: string }> = {
-  steps: { bg: '#DDEBDD', ic: 'steps', c: '#1F4D3A' },
-  check: { bg: '#DDEBDD', ic: 'check', c: '#1F4D3A' },
-  calendar: { bg: '#EEF4ED', ic: 'calendar', c: '#1F4D3A' },
-  gift: { bg: '#FBE3DB', ic: 'gift', c: '#C25C40' },
-  cheer: { bg: '#FCF1DD', ic: 'cheer', c: '#C7841A' },
-  heart: { bg: '#FBE3DB', ic: 'heart', c: '#C25C40' },
-  trophy: { bg: '#FCF1DD', ic: 'trophy', c: '#C7841A' },
+const POST_TONE: Record<string, { bg: string; ic: IconName; c: string }> = {
+  STEPS: { bg: '#DDEBDD', ic: 'steps', c: '#1F4D3A' },
+  TASK_CERT: { bg: '#DDEBDD', ic: 'check', c: '#1F4D3A' },
+  SCHEDULE: { bg: '#EEF4ED', ic: 'calendar', c: '#1F4D3A' },
+  GIFT: { bg: '#FBE3DB', ic: 'gift', c: '#C25C40' },
+  CHEER: { bg: '#FCF1DD', ic: 'cheer', c: '#C7841A' },
+  MILESTONE: { bg: '#FCF1DD', ic: 'trophy', c: '#C7841A' },
+  FREE: { bg: '#EEF4ED', ic: 'chat', c: '#1F4D3A' },
 };
+const REACTIONS: { key: Reaction; ic: IconName; label: string; c: string; bg: string }[] = [
+  { key: 'CHEER', ic: 'cheer', label: '응원해요', c: '#E07A5F', bg: '#FBE3DB' },
+  { key: 'LOVE', ic: 'heart', label: '사랑해요', c: '#C25C40', bg: '#FBE3DB' },
+  { key: 'AMAZING', ic: 'trophy', label: '대단해요', c: '#C7841A', bg: '#FCF1DD' },
+  { key: 'FIGHTING', ic: 'flame', label: '화이팅', c: '#C7841A', bg: '#FCF1DD' },
+  { key: 'BEST', ic: 'check', label: '최고예요', c: '#2F6B45', bg: '#DDEBDD' },
+  { key: 'HEALTHY', ic: 'leaf', label: '건강하세요', c: '#2F6B45', bg: '#DDEBDD' },
+];
 
-interface NewsCardData {
-  who: string; type: string; msg: string; time: string; cheer?: number; comments?: number; liked?: boolean; photo?: boolean;
+/* 상대 시각 표기 */
+function fromNow(iso?: string) {
+  if (!iso) return '';
+  const d = new Date(iso); const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return '방금 전';
+  if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`;
+  return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
 }
-function NewsCard({ who, type, msg, time, cheer, comments, liked, photo, onClick }: NewsCardData & { onClick?: () => void }) {
-  const t = NEWS_TONE[type] || NEWS_TONE.check;
+
+function NewsCard({ post, onClick, onCheer }: { post: PostResponse; onClick?: () => void; onCheer?: () => void }) {
+  const t = POST_TONE[post.type] || POST_TONE.FREE;
+  const who = post.author?.name ?? '가족';
   return (
     <div className="act-card press" onClick={onClick}>
       <div className="act-top">
         <PAvatar name={who} size={42} />
         <div className="act-head">
-          <p className="act-msg" dangerouslySetInnerHTML={{ __html: msg }} />
-          <span className="act-time">{time}</span>
+          <p className="act-msg"><b>{who}</b> {post.content}</p>
+          <span className="act-time">{fromNow(post.createdAt)}</span>
         </div>
         <div className="act-badge" style={{ background: t.bg }}><Icon name={t.ic} size={18} sw={1.95} color={t.c} /></div>
       </div>
-      {photo && <div className="act-photo"><Icon name="image" size={30} sw={1.6} color="#C9B79E" /></div>}
-      {cheer !== undefined && (
-        <div className="act-react">
-          <button className={`react-btn press ${liked ? 'on' : ''}`}><Icon name="cheer" size={16} sw={2} color={liked ? '#E07A5F' : '#9A958A'} />응원 {cheer}</button>
-          <button className="react-btn press"><Icon name="chat" size={16} sw={2} color="#9A958A" />댓글 {comments || 0}</button>
-        </div>
-      )}
+      {(post.photoUrls?.length ?? 0) > 0 && <div className="act-photo"><Icon name="image" size={30} sw={1.6} color="#C9B79E" /></div>}
+      <div className="act-react">
+        <button className={`react-btn press ${post.myReaction ? 'on' : ''}`} onClick={(e) => { e.stopPropagation(); onCheer?.(); }}><Icon name="cheer" size={16} sw={2} color={post.myReaction ? '#E07A5F' : '#9A958A'} />응원 {post.cheerCount ?? 0}</button>
+        <button className="react-btn press"><Icon name="chat" size={16} sw={2} color="#9A958A" />댓글 {post.commentCount ?? 0}</button>
+      </div>
     </div>
   );
 }
@@ -43,16 +64,23 @@ function NewsCard({ who, type, msg, time, cheer, comments, liked, photo, onClick
 /* ── 소식 피드 (+ 작성 시트) ────────────────── */
 export function NewsFeed() {
   const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const { data: me } = useMe();
+  const { data: posts, isLoading } = useNewsFeed(groupId);
+  const createPost = useCreatePost(groupId ?? 0);
+  const cheer = useSendCheer(groupId ?? 0);
   const [write, setWrite] = useState(false);
-  const today: NewsCardData[] = [
-    { who: '아빠', type: 'steps', msg: '<b>아빠</b>가 오늘 걷기 목표 8,000보를 달성했어요', time: '방금 전', cheer: 12, comments: 3, liked: true },
-    { who: '엄마', type: 'check', msg: '<b>엄마</b>가 «감기약 복용» 숙제를 인증했어요', time: '32분 전', cheer: 5, comments: 1, photo: true },
-    { who: '큰딸', type: 'cheer', msg: '<b>큰딸</b>이 아빠에게 응원을 보냈어요', time: '1시간 전', cheer: 2, comments: 0 },
-  ];
-  const yest: NewsCardData[] = [
-    { who: '엄마', type: 'gift', msg: '<b>엄마</b>의 위시리스트에 «무릎 보호대»가 추가됐어요', time: '어제 · 오후 8:12', cheer: 3, comments: 2 },
-    { who: '할머니', type: 'trophy', msg: '<b>할머니</b>가 «아침 스트레칭» 7일 연속 달성을 기록했어요', time: '어제 · 오전 7:40', cheer: 9, comments: 4 },
-  ];
+  const [text, setText] = useState('');
+
+  const submit = async () => {
+    if (!groupId || !text.trim()) return;
+    try { await createPost.mutateAsync({ type: 'FREE', content: text.trim() }); setText(''); setWrite(false); }
+    catch { /* noop */ }
+  };
+
+  const list = posts ?? [];
+  if (!isLoading && list.length === 0) return <NewsEmpty onWrite={() => setWrite(true)} sheet={write} onClose={() => setWrite(false)} text={text} setText={setText} onSubmit={submit} me={me?.name} busy={createPost.isPending} />;
+
   return (
     <div className="screen">
       <div className="scroll">
@@ -64,111 +92,180 @@ export function NewsFeed() {
           </div>
         </div>
         <div className="block">
-          <div className="noti-label">오늘</div>
-          <div className="stack">{today.map((a, i) => <NewsCard key={i} {...a} onClick={() => navigate('/news/detail')} />)}</div>
-        </div>
-        <div className="block">
-          <div className="noti-label">어제</div>
-          <div className="stack">{yest.map((a, i) => <NewsCard key={i} {...a} onClick={() => navigate('/news/detail')} />)}</div>
+          {isLoading && <div className="info-banner">소식을 불러오는 중…</div>}
+          <div className="stack">
+            {list.map(p => (
+              <NewsCard key={p.id} post={p}
+                onClick={() => navigate(`/news/detail?pid=${p.id}`)}
+                onCheer={() => groupId && cheer.mutate({ postId: p.id, body: { reaction: 'CHEER' } })} />
+            ))}
+          </div>
         </div>
         <div style={{ height: 18 }} />
       </div>
       <BottomNav active="소식" />
 
-      <BottomSheet open={write} onClose={() => setWrite(false)} title="소식 남기기"
-        footer={<button className="btn-primary press" onClick={() => setWrite(false)}>가족에게 공유하기</button>}>
-        <div className="write-head"><PAvatar name="나" size={38} /><div><div className="wh-name">김도란</div><div className="wh-to"><Icon name="family" size={13} sw={2} color="#6D6A61" />우리집 전체에게</div></div></div>
-        <div className="afield-box" style={{ height: 'auto', minHeight: 110, alignItems: 'flex-start', paddingTop: 15 }}><span className="afield-val" style={{ color: '#A8A296' }}>가족과 나누고 싶은 소식을 적어보세요</span></div>
-        <div className="write-photos">
-          <button className="photo-add press"><Icon name="camera" size={22} sw={1.8} color="#7FA585" /><span>사진</span></button>
-          <div className="photo-thumb"><Icon name="image" size={24} sw={1.6} color="#C9B79E" /><button className="photo-x"><Icon name="close" size={12} sw={2.6} color="#fff" /></button></div>
-        </div>
-        <div className="write-opts">
-          <button className="wopt press"><Icon name="calendar" size={18} sw={1.9} color="#1F4D3A" />일정 공유</button>
-          <button className="wopt press"><Icon name="check" size={18} sw={1.9} color="#1F4D3A" />숙제 인증</button>
-        </div>
-      </BottomSheet>
+      <WriteSheet open={write} onClose={() => setWrite(false)} text={text} setText={setText} onSubmit={submit} me={me?.name} busy={createPost.isPending} />
     </div>
+  );
+}
+
+/* 소식 작성 시트 (공통) */
+function WriteSheet({ open, onClose, text, setText, onSubmit, me, busy }: {
+  open: boolean; onClose: () => void; text: string; setText: (v: string) => void; onSubmit: () => void; me?: string; busy?: boolean;
+}) {
+  const [photos, setPhotos] = useState<{ url: string }[]>([]);
+  const addPhotos = async () => {
+    const files = await pickImage({ multiple: true });
+    // 미리보기용 objectURL 생성 (실제 업로드는 업로드 API 연동 시 처리)
+    setPhotos(p => [...p, ...files.map(f => ({ url: URL.createObjectURL(f) }))]);
+  };
+  const removePhoto = (i: number) => setPhotos(p => { URL.revokeObjectURL(p[i].url); return p.filter((_, j) => j !== i); });
+  return (
+    <BottomSheet open={open} onClose={onClose} title="소식 남기기"
+      footer={<button className={`btn-primary press ${busy || !text.trim() ? 'disabled' : ''}`} onClick={onSubmit} disabled={busy}>{busy ? '공유 중…' : '가족에게 공유하기'}</button>}>
+      <div className="write-head"><PAvatar name={me || '나'} size={38} /><div><div className="wh-name">{me || '나'}</div><div className="wh-to"><Icon name="family" size={13} sw={2} color="#6D6A61" />우리집 전체에게</div></div></div>
+      <textarea className="afield-box" value={text} onChange={e => setText(e.target.value)} placeholder="가족과 나누고 싶은 소식을 적어보세요" style={{ height: 'auto', minHeight: 110, alignItems: 'flex-start', paddingTop: 15, width: '100%', resize: 'none' }} />
+      <div className="write-photos">
+        <button className="photo-add press" onClick={addPhotos}><Icon name="camera" size={22} sw={1.8} color="#7FA585" /><span>사진</span></button>
+        {photos.map((p, i) => (
+          <div key={i} className="photo-thumb" style={{ backgroundImage: `url(${p.url})`, backgroundSize: 'cover', backgroundPosition: 'center' }}>
+            <button className="photo-x" onClick={() => removePhoto(i)}><Icon name="close" size={12} sw={2.6} color="#fff" /></button>
+          </div>
+        ))}
+      </div>
+    </BottomSheet>
   );
 }
 
 /* ── 소식 상세 · 댓글 (+ 응원 시트) ──────────── */
 export function NewsDetail() {
-  const [cheer, setCheer] = useState(false);
-  const comments = [
-    { who: '엄마', text: '우리 아들 최고! 오늘도 수고했어요', time: '20분 전' },
-    { who: '큰딸', text: '아빠 대단해요. 저도 같이 걸을래요', time: '12분 전' },
-    { who: '할머니', text: '건강이 최고지~', time: '5분 전' },
-  ];
-  const reacts: { ic: IconName; label: string; c: string; bg: string }[] = [
-    { ic: 'cheer', label: '응원해요', c: '#E07A5F', bg: '#FBE3DB' },
-    { ic: 'heart', label: '사랑해요', c: '#C25C40', bg: '#FBE3DB' },
-    { ic: 'trophy', label: '대단해요', c: '#C7841A', bg: '#FCF1DD' },
-    { ic: 'flame', label: '화이팅', c: '#C7841A', bg: '#FCF1DD' },
-    { ic: 'check', label: '최고예요', c: '#2F6B45', bg: '#DDEBDD' },
-    { ic: 'leaf', label: '건강하세요', c: '#2F6B45', bg: '#DDEBDD' },
-  ];
+  const navigate = useNavigate();
+  const { groupId } = useActiveGroup();
+  const pid = Number(new URLSearchParams(window.location.search).get('pid')) || null;
+  const { data: post } = usePost(groupId, pid);
+  const addComment = useAddComment(groupId ?? 0);
+  const sendCheer = useSendCheer(groupId ?? 0);
+  const deletePost = useDeletePost(groupId ?? 0);
+  const { data: me } = useMe();
+
+  const [cheerOpen, setCheerOpen] = useState(false);
+  const [reaction, setReaction] = useState<Reaction>('CHEER');
+  const [cheerMsg, setCheerMsg] = useState('');
+  const [comment, setComment] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+
+  const comments = post?.comments ?? [];
+  const cheerers = post?.cheerers ?? [];
+  const who = post?.author?.name ?? '가족';
+  const t = post ? (POST_TONE[post.type] || POST_TONE.FREE) : POST_TONE.FREE;
+  const mine = !!post && me?.id === post.author?.userId;
+
+  const doDelete = async () => {
+    if (!groupId || !pid) return;
+    try { await deletePost.mutateAsync(pid); navigate('/news'); } catch { /* noop */ }
+  };
+
+  const submitComment = async () => {
+    if (!groupId || !pid || !comment.trim()) return;
+    try { await addComment.mutateAsync({ postId: pid, body: { content: comment.trim() } }); setComment(''); }
+    catch { /* noop */ }
+  };
+  const submitCheer = async () => {
+    if (!groupId || !pid) return;
+    try { await sendCheer.mutateAsync({ postId: pid, body: { reaction, message: cheerMsg.trim() || null } }); setCheerOpen(false); setCheerMsg(''); }
+    catch { /* noop */ }
+  };
+
   return (
     <div className="screen">
       <div className="scroll" style={{ paddingBottom: 0 }}>
-        <NavHeader title="소식" trailing={<button className="icon-action press"><Icon name="dots" size={20} color="#3A463C" /></button>} />
+        <NavHeader title="소식" trailing={mine ? <button className="icon-action press" onClick={() => setMenuOpen(true)}><Icon name="dots" size={20} color="#3A463C" /></button> : undefined} />
         <div className="block" style={{ paddingTop: 6 }}>
           <div className="act-card" style={{ boxShadow: 'none' }}>
             <div className="act-top">
-              <PAvatar name="아빠" size={44} />
+              <PAvatar name={who} size={44} />
               <div className="act-head">
-                <p className="act-msg"><b>아빠</b>가 오늘 걷기 목표 8,000보를 달성했어요</p>
-                <span className="act-time">오늘 · 오후 2:14</span>
+                <p className="act-msg"><b>{who}</b> {post?.content ?? ''}</p>
+                <span className="act-time">{fromNow(post?.createdAt)}</span>
               </div>
-              <div className="act-badge" style={{ background: '#DDEBDD' }}><Icon name="steps" size={18} sw={1.95} color="#1F4D3A" /></div>
+              <div className="act-badge" style={{ background: t.bg }}><Icon name={t.ic} size={18} sw={1.95} color={t.c} /></div>
             </div>
-            <div className="detail-metric">
-              <div className="dm-num">8,240<i>보</i></div>
-              <div className="dm-bar"><div className="bar"><div className="bar-fill" style={{ width: '100%' }} /></div><span className="dm-cap">목표 8,000보 · 103% 달성</span></div>
-            </div>
+            {post?.metricValue != null && (
+              <div className="detail-metric">
+                <div className="dm-num">{post.metricValue.toLocaleString()}<i>{post.metricUnit}</i></div>
+                <div className="dm-bar"><div className="bar"><div className="bar-fill" style={{ width: `${post.metricGoal ? Math.min(100, Math.round((post.metricValue / post.metricGoal) * 100)) : 100}%` }} /></div>{post.metricGoal != null && <span className="dm-cap">목표 {post.metricGoal.toLocaleString()}{post.metricUnit}</span>}</div>
+              </div>
+            )}
           </div>
         </div>
-        <div className="block" style={{ paddingTop: 4 }}>
-          <div className="cheer-summary">
-            <div className="cheer-avs">{['엄마', '큰딸', '할머니'].map((m, i) => <div key={m} style={{ marginLeft: i ? -8 : 0, zIndex: 3 - i }}><PAvatar name={m} size={26} ring ringColor="#FFF8EF" /></div>)}</div>
-            <span className="cheer-text"><b>엄마</b> 외 11명이 응원했어요</span>
+        {cheerers.length > 0 && (
+          <div className="block" style={{ paddingTop: 4 }}>
+            <div className="cheer-summary">
+              <div className="cheer-avs">{cheerers.slice(0, 3).map((m, i) => <div key={m.userId} style={{ marginLeft: i ? -8 : 0, zIndex: 3 - i }}><PAvatar name={m.name} size={26} ring ringColor="#FFF8EF" /></div>)}</div>
+              <span className="cheer-text"><b>{cheerers[0].name}</b>{cheerers.length > 1 ? ` 외 ${cheerers.length - 1}명이` : '님이'} 응원했어요</span>
+            </div>
           </div>
-        </div>
+        )}
         <div className="block" style={{ paddingTop: 8 }}>
           <span className="memo-label">댓글 {comments.length}</span>
           <div className="comment-list">
-            {comments.map((c, i) => (
-              <div key={i} className="comment">
-                <PAvatar name={c.who} size={34} />
+            {comments.map(c => (
+              <div key={c.id} className="comment">
+                <PAvatar name={c.author?.name ?? '가족'} size={34} />
                 <div className="comment-body">
-                  <div className="comment-bubble"><span className="comment-who">{c.who}</span>{c.text}</div>
-                  <div className="comment-meta"><span>{c.time}</span><button className="press">답글</button><button className="press">응원</button></div>
+                  <div className="comment-bubble"><span className="comment-who">{c.author?.name}</span>{c.content}</div>
+                  <div className="comment-meta"><span>{fromNow(c.createdAt)}</span></div>
                 </div>
               </div>
             ))}
+            {comments.length === 0 && <p style={{ color: '#A8A296', fontSize: 14, padding: '6px 2px' }}>첫 댓글을 남겨보세요.</p>}
           </div>
         </div>
         <div style={{ height: 16 }} />
       </div>
       <div className="comment-input">
-        <button className="ci-cheer press" onClick={() => setCheer(true)}><Icon name="cheer" size={20} sw={2} color="#E07A5F" /></button>
-        <div className="ci-field">따뜻한 댓글을 남겨보세요</div>
-        <button className="ci-send press"><Icon name="send" size={19} sw={1.9} color="#fff" /></button>
+        <button className="ci-cheer press" onClick={() => setCheerOpen(true)}><Icon name="cheer" size={20} sw={2} color="#E07A5F" /></button>
+        <input className="ci-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="따뜻한 댓글을 남겨보세요" onKeyDown={e => { if (e.key === 'Enter') submitComment(); }} style={{ border: 'none', background: '#fff' }} />
+        <button className="ci-send press" onClick={submitComment} disabled={addComment.isPending}><Icon name="send" size={19} sw={1.9} color="#fff" /></button>
       </div>
 
-      <BottomSheet open={cheer} onClose={() => setCheer(false)} title="응원 보내기"
-        footer={<button className="btn-primary terra press" onClick={() => setCheer(false)}>응원 보내기</button>}>
-        <div className="cheer-target"><PAvatar name="아빠" size={40} /><div><div className="ct-name">아빠에게</div><div className="ct-sub">걷기 목표 달성을 응원해요</div></div></div>
+      <BottomSheet open={cheerOpen} onClose={() => setCheerOpen(false)} title="응원 보내기"
+        footer={<button className="btn-primary terra press" onClick={submitCheer} disabled={sendCheer.isPending}>{sendCheer.isPending ? '보내는 중…' : '응원 보내기'}</button>}>
+        <div className="cheer-target"><PAvatar name={who} size={40} /><div><div className="ct-name">{who}에게</div><div className="ct-sub">마음을 담아 응원해요</div></div></div>
         <div className="react-grid">
-          {reacts.map((r, i) => (
-            <button key={r.label} className={`react-tile press ${i === 0 ? 'on' : ''}`}>
+          {REACTIONS.map(r => (
+            <button key={r.key} className={`react-tile press ${reaction === r.key ? 'on' : ''}`} onClick={() => setReaction(r.key)}>
               <span className="rt-ic" style={{ background: r.bg }}><Icon name={r.ic} size={24} sw={1.9} color={r.c} /></span>
               <span className="rt-label">{r.label}</span>
             </button>
           ))}
         </div>
-        <div className="afield"><span className="afield-label">메시지 (선택)</span><div className="afield-box"><span className="afield-val" style={{ color: '#A8A296' }}>한마디 응원을 적어보세요</span></div></div>
+        <div className="afield"><span className="afield-label">메시지 (선택)</span><div className="afield-box"><input className="afield-val" value={cheerMsg} onChange={e => setCheerMsg(e.target.value)} placeholder="한마디 응원을 적어보세요" style={{ flex: 1 }} /></div></div>
       </BottomSheet>
+
+      {/* 더보기 메뉴 (본인 글) */}
+      <BottomSheet open={menuOpen} onClose={() => setMenuOpen(false)} title="소식 관리">
+        <button className="mm-opt press danger" style={{ width: '100%' }} onClick={() => { setMenuOpen(false); setDelOpen(true); }}>
+          <Icon name="trash" size={18} sw={1.9} color="#C25C40" />소식 삭제하기
+        </button>
+      </BottomSheet>
+
+      {delOpen && (
+        <div className="dialog-layer open">
+          <div className="dialog-scrim" onClick={() => setDelOpen(false)} />
+          <div className="dialog">
+            <div className="dialog-ic"><Icon name="trash" size={26} sw={1.9} color="#C25C40" /></div>
+            <h4 className="dialog-title">소식을 삭제할까요?</h4>
+            <p className="dialog-desc">이 소식과 댓글·응원이 모두 삭제돼요.<br />이 작업은 되돌릴 수 없어요.</p>
+            <div className="dialog-actions">
+              <button className="dlg-btn press" onClick={() => setDelOpen(false)}>취소</button>
+              <button className="dlg-btn danger press" onClick={doDelete} disabled={deletePost.isPending}>{deletePost.isPending ? '삭제 중…' : '삭제'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -176,12 +273,9 @@ export function NewsDetail() {
 /* ── 대화방 목록 ────────────────────────────── */
 export function NewsChatList() {
   const navigate = useNavigate();
-  const rooms = [
-    { name: '우리집', members: ['엄마', '아빠', '나'], last: '아빠: 오 좋다. 걷기 끝나고 갈게', time: '오후 2:40', unread: 2, group: true },
-    { name: '엄마', members: ['엄마'], last: '약은 꼭 챙겨 드세요!', time: '오후 1:10', unread: 0 },
-    { name: '큰딸', members: ['큰딸'], last: '언니 주말에 같이 산책 가요', time: '어제', unread: 1 },
-    { name: '할머니', members: ['할머니'], last: '사진 잘 받았다 고맙구나', time: '어제', unread: 0 },
-  ];
+  const { groupId } = useActiveGroup();
+  const { data: rooms, isLoading } = useRooms(groupId);
+  const list = rooms ?? [];
   return (
     <div className="screen">
       <div className="scroll">
@@ -190,18 +284,23 @@ export function NewsChatList() {
           <div className="hdr-icons"><button className="ic-btn press"><Icon name="search" size={21} sw={1.9} color="#3A463C" /></button><button className="ic-btn press"><Icon name="edit" size={20} sw={1.9} color="#3A463C" /></button></div>
         </div>
         <div className="block" style={{ paddingTop: 8 }}>
+          {isLoading && <div className="info-banner">대화방을 불러오는 중…</div>}
           <div className="set-card">
-            {rooms.map((r, i) => (
-              <button key={r.name} className={`chat-row ${i === rooms.length - 1 ? 'last' : ''} press`} onClick={() => navigate('/news/chat')}>
-                {r.group
-                  ? <div className="chat-grp-av">{r.members.slice(0, 3).map((m, j) => <div key={m} className={`cga cga-${j}`}><PAvatar name={m} size={22} /></div>)}</div>
-                  : <PAvatar name={r.name} size={48} />}
-                <div className="chat-row-body">
-                  <div className="chat-row-top"><span className="chat-row-name">{r.name}{r.group && <span className="chat-grp-count">6</span>}</span><span className="chat-row-time">{r.time}</span></div>
-                  <div className="chat-row-bottom"><span className="chat-row-last">{r.last}</span>{r.unread > 0 && <span className="chat-unread">{r.unread}</span>}</div>
-                </div>
-              </button>
-            ))}
+            {list.map((r, i) => {
+              const grp = r.type === 'GROUP';
+              return (
+                <button key={r.id} className={`chat-row ${i === list.length - 1 ? 'last' : ''} press`} onClick={() => navigate(`/news/chat?rid=${r.id}`)}>
+                  {grp
+                    ? <div className="chat-grp-av">{r.members.slice(0, 3).map((m, j) => <div key={m.userId} className={`cga cga-${j}`}><PAvatar name={m.name} size={22} /></div>)}</div>
+                    : <PAvatar name={r.title || r.members[0]?.name || '?'} size={48} />}
+                  <div className="chat-row-body">
+                    <div className="chat-row-top"><span className="chat-row-name">{r.title || r.members.map(m => m.name).join(', ')}{grp && <span className="chat-grp-count">{r.members.length}</span>}</span><span className="chat-row-time">{fromNow(r.lastMessage?.createdAt)}</span></div>
+                    <div className="chat-row-bottom"><span className="chat-row-last">{r.lastMessage?.content ?? ''}</span>{r.unreadCount > 0 && <span className="chat-unread">{r.unreadCount}</span>}</div>
+                  </div>
+                </button>
+              );
+            })}
+            {!isLoading && list.length === 0 && <div className="chat-row last" style={{ color: '#A8A296' }}>아직 대화방이 없어요.</div>}
           </div>
         </div>
         <div style={{ height: 18 }} />
@@ -214,65 +313,78 @@ export function NewsChatList() {
 /* ── 대화방 · 채팅 ──────────────────────────── */
 export function NewsChat() {
   const navigate = useNavigate();
-  const msgs: { in?: boolean; out?: boolean; who?: string; text: string }[] = [
-    { in: true, who: '엄마', text: '오늘 검진 결과 잘 나왔어요. 다들 걱정 말아요' },
-    { in: true, who: '엄마', text: '큰딸 응원 고마워~' },
-    { out: true, text: '엄마 다행이에요! 약은 꼭 챙겨 드세요' },
-    { out: true, text: '오늘 저녁은 제가 준비할게요' },
-    { in: true, who: '아빠', text: '오 좋다. 나도 걷기 끝나고 바로 갈게' },
-  ];
+  const { groupId } = useActiveGroup();
+  const rid = Number(new URLSearchParams(window.location.search).get('rid')) || null;
+  const { data: rooms } = useRooms(groupId);
+  const { data: messages } = useMessages(groupId, rid);
+  const send = useSendMessage(groupId ?? 0, rid ?? 0);
+  const [text, setText] = useState('');
+
+  const room = rooms?.find(r => r.id === rid);
+  const msgs = messages ?? [];
+
+  const submit = async () => {
+    if (!groupId || !rid || !text.trim()) return;
+    try { await send.mutateAsync({ content: text.trim() }); setText(''); } catch { /* noop */ }
+  };
+
   return (
     <div className="screen">
       <div className="chat-hdr">
         <button className="nav-back press" onClick={() => navigate(-1)}><Icon name="chevron" size={22} sw={2.3} color="#20231F" style={{ transform: 'rotate(180deg)' }} /></button>
         <div className="chat-hdr-mid">
-          <div className="ava-stack">{['엄마', '아빠', '나'].map((m, i) => <div key={m} style={{ marginLeft: i ? -9 : 0, zIndex: 5 - i }}><PAvatar name={m} size={26} ring ringColor="#FFF8EF" /></div>)}</div>
-          <div><div className="chat-title">우리집</div><div className="chat-sub">6명</div></div>
+          <div className="ava-stack">{(room?.members ?? []).slice(0, 3).map((m, i) => <div key={m.userId} style={{ marginLeft: i ? -9 : 0, zIndex: 5 - i }}><PAvatar name={m.name} size={26} ring ringColor="#FFF8EF" /></div>)}</div>
+          <div><div className="chat-title">{room?.title || (room?.members ?? []).map(m => m.name).join(', ') || '대화'}</div><div className="chat-sub">{room?.members.length ?? 0}명</div></div>
         </div>
         <button className="icon-action press"><Icon name="dots" size={20} color="#3A463C" /></button>
       </div>
       <div className="chat-scroll">
-        <div className="chat-date"><span>2025년 6월 12일</span></div>
-        <div className="chat-sys"><Icon name="calendar" size={14} sw={2} color="#7FA585" />엄마 정기 검진 일정이 등록됐어요</div>
         {msgs.map((m, i) => {
+          if (m.type === 'SYSTEM') return <div className="chat-sys" key={m.id}><Icon name="info" size={14} sw={2} color="#7FA585" />{m.content}</div>;
           const prev = msgs[i - 1];
-          const sameWho = m.in && prev && prev.in && prev.who === m.who;
-          if (m.in) return (
-            <div className="msg in" key={i}>
-              <div className="msg-av">{!sameWho ? <PAvatar name={m.who!} size={32} /> : <span style={{ width: 32, display: 'inline-block' }} />}</div>
-              <div className="msg-col">{!sameWho && <span className="msg-name">{m.who}</span>}<div className="bubble in">{m.text}</div></div>
+          const sameWho = !m.mine && prev && !prev.mine && prev.sender?.userId === m.sender?.userId;
+          if (!m.mine) return (
+            <div className="msg in" key={m.id}>
+              <div className="msg-av">{!sameWho ? <PAvatar name={m.sender?.name ?? '?'} size={32} /> : <span style={{ width: 32, display: 'inline-block' }} />}</div>
+              <div className="msg-col">{!sameWho && <span className="msg-name">{m.sender?.name}</span>}<div className="bubble in">{m.content}</div></div>
             </div>
           );
-          return <div className="msg out" key={i}><div className="bubble out">{m.text}</div></div>;
+          return <div className="msg out" key={m.id}><div className="bubble out">{m.content}</div></div>;
         })}
-        <div className="chat-sys" style={{ background: '#FBE3DB', borderColor: '#F2D6CB', color: '#C25C40' }}><Icon name="gift" size={14} sw={2} color="#C25C40" />큰딸이 엄마에게 선물을 보냈어요</div>
+        {msgs.length === 0 && <div className="chat-sys"><Icon name="chat" size={14} sw={2} color="#7FA585" />첫 메시지를 보내보세요</div>}
       </div>
       <div className="chat-input">
-        <button className="ci-plus press"><Icon name="plus" size={22} sw={2.2} color="#6D6A61" /></button>
-        <div className="ci-field2">메시지 보내기</div>
-        <button className="ci-send press"><Icon name="send" size={20} sw={1.9} color="#fff" /></button>
+        <button className="ci-plus press" onClick={async () => { const [f] = await pickImage(); if (f) alert('사진 전송은 업로드 기능 연동 후 지원됩니다.'); }}><Icon name="plus" size={22} sw={2.2} color="#6D6A61" /></button>
+        <input className="ci-field2" value={text} onChange={e => setText(e.target.value)} placeholder="메시지 보내기" onKeyDown={e => { if (e.key === 'Enter') submit(); }} style={{ border: 'none', background: '#fff' }} />
+        <button className="ci-send press" onClick={submit} disabled={send.isPending}><Icon name="send" size={20} sw={1.9} color="#fff" /></button>
       </div>
     </div>
   );
 }
 
 /* ── 소식 없음 · 빈 화면 ────────────────────── */
-export function NewsEmpty() {
+export function NewsEmpty({ onWrite, sheet, onClose, text, setText, onSubmit, me, busy }: {
+  onWrite?: () => void; sheet?: boolean; onClose?: () => void;
+  text?: string; setText?: (v: string) => void; onSubmit?: () => void; me?: string; busy?: boolean;
+} = {}) {
   return (
     <div className="screen">
       <div className="scroll" style={{ display: 'flex', flexDirection: 'column' }}>
         <div className="hdr" style={{ paddingBottom: 8 }}>
           <div><h1 className="hdr-title">소식</h1><p className="hdr-sub">우리 가족의 오늘을 모았어요</p></div>
-          <div className="hdr-icons"><button className="ic-btn press"><Icon name="chat" size={21} sw={1.9} color="#3A463C" /></button></div>
+          <div className="hdr-icons"><button className="ic-btn press" onClick={onWrite}><Icon name="edit" size={20} sw={1.9} color="#3A463C" /></button></div>
         </div>
         <div className="empty">
           <div className="empty-ic"><Icon name="cheer" size={38} sw={1.7} color="#9BB89F" /></div>
           <h4 className="empty-title">아직 소식이 없어요</h4>
           <p className="empty-desc">가족이 숙제를 인증하거나 목표를 달성하면 이곳에 소식이 쌓여요.</p>
-          <button className="empty-cta press"><Icon name="plus" size={18} sw={2.3} color="#fff" />첫 소식 남기기</button>
+          <button className="empty-cta press" onClick={onWrite}><Icon name="plus" size={18} sw={2.3} color="#fff" />첫 소식 남기기</button>
         </div>
       </div>
       <BottomNav active="소식" />
+      {setText && onSubmit && onClose && (
+        <WriteSheet open={!!sheet} onClose={onClose} text={text ?? ''} setText={setText} onSubmit={onSubmit} me={me} busy={busy} />
+      )}
     </div>
   );
 }
